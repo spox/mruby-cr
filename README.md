@@ -42,8 +42,13 @@ can be defined in the configuration file as:
 }
 ```
 
-If a configuration defined at `.mruby-cr` it
+If a configuration file is at `.mruby-cr` it
 will be automatically loaded.
+
+### mruby
+
+Build of mruby can be customized by providing
+a `mruby_build.rb` file in the local directory.
 
 ## Inspiration
 
