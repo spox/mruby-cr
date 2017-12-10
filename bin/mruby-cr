@@ -122,8 +122,11 @@ end
 
 unless Dir.exist?(mruby_libdir)
   $stderr.puts "Warning: mruby is not built - building..."
-  if File.exist?("mruby-build.rb")
-    FileUtils.cp("mruby-build.rb", File.join(mruby_dir, "build_config.rb"))
+  if File.exist?("./mruby_build.rb")
+    $stderr.puts "Warning: local mruby-build.rb found, using for build..."
+    FileUtils.cp("mruby_build.rb", File.join(mruby_dir, "build_config.rb"))
+  else
+    $stderr.puts "Warning: no custom mruby build file, using default..."
   end
   Dir.chdir(mruby_dir) do
     unless system('./minirake')
