@@ -1,0 +1,6 @@
+Gemfile.*
+.mruby-cr
+vendor
+mruby-1*
+.bundle
+.#*

@@ -1,0 +1,182 @@
+#!/usr/bin/env ruby
+
+require 'mruby-cr/version'
+
+require 'optparse'
+require 'tmpdir'
+
+default_options = {
+  cflags: [],
+  mruby_version: '1.3.0',
+  mruby_destination: '.',
+  output_directory: '.',
+}
+
+cli_options = {
+  cflags: []
+}
+
+config_options = {
+  cflags: []
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = "usage: #{File.basename(__FILE__)} [options] default|./lib.rb"
+
+  opts.on "-mVERSION", "--mruby-version=VERSION", "Version of mruby" do |val|
+    cli_options[:mruby_version] = val
+  end
+
+  opts.on "-DDIR", "--mruby-destination=DIR", "Destination for mruby directory" do |val|
+    cli_options[:mruby_destination] = val
+  end
+
+  opts.on "-oDIR", "--output-directory=DIR", "Destination for generated mruby.cr file" do |val|
+    cli_options[:output_directory] = val
+  end
+
+  opts.on "-cFILE", "--config=FILE", "Configuration file" do |val|
+    cli_options[:config] = val
+  end
+
+  opts.on "-fCFLAGS", "--cflags=CFLAGS", "Comma delimited list of flags" do |val|
+    cli_options[:cflags] += val.split(',')
+  end
+
+  opts.on "-d", "--[no-]debug", "Enable debug output" do |val|
+    cli_options[:debug] = val
+  end
+
+  opts.on "-v", "--version", "Display current version" do |_|
+    puts "#{File.basename(__FILE__)} - v#{MrubyCr::VERSION}"
+    exit
+  end
+end
+parser.parse!
+
+if File.exist?('.mruby-cr')
+  cli_options[:config] = '.mruby-cr'
+end
+
+if cli_options[:config]
+  if !File.exist?(cli_options[:config])
+    $stderr.puts "Error: failed to load configuration file @ #{cli_options[:config]}"
+    exit -1
+  end
+  require 'json'
+  config_options = JSON.parse(File.read(cli_options.delete(:config)), symbolize_names: true)
+end
+
+options = {}
+ckeys = (default_options.keys + config_options.keys + cli_options.keys).uniq
+
+ckeys.each do |key|
+  options[key] = default_options[key]
+  if options[key].is_a?(Array)
+    options[key] += config_options[key] if config_options[key]
+    options[key] += cli_options[key] if cli_options[key]
+  else
+    options[key] = config_options[key] if config_options.key?(key)
+    options[key] = cli_options[key] if cli_options.key?(key)
+  end
+end
+
+if ARGV.size != 1
+  $stderr.puts parser
+  exit -1
+end
+
+if ARGV.first == "default"
+  lib_spec = File.expand_path(File.join(
+    File.dirname(__FILE__), '..', 'lib/mruby-cr/mruby.rb'
+  ))
+else
+  lib_spec = File.expand_path(ARGV.first)
+end
+
+unless File.exist?(lib_spec)
+  $stderr.puts "Error: given path does not exist - #{lib_spec}"
+  exit -2
+end
+
+mruby_dir = File.expand_path(File.join(options[:mruby_destination],
+  "mruby-#{options[:mruby_version]}"))
+mruby_libdir = File.join(mruby_dir, "build", "host", "lib")
+
+unless Dir.exist?(mruby_dir)
+  $stderr.puts "Warning: mruby is not installed @ #{mruby_dir} - installing..."
+  Dir.mktmpdir('mruby-cr') do |dir|
+    Dir.chdir(dir) do
+      unless system("curl -L -o mruby.zip https://github.com/mruby/mruby/archive/#{options[:mruby_version]}.zip")
+        $stderr.puts "Error: failed to download mruby"
+        exit -2
+      end
+      unless system("unzip mruby.zip")
+        $stderr.puts "Error: failed to unpack mruby"
+        exit -2
+      end
+      FileUtils.mv("mruby-#{options[:mruby_version]}", mruby_dir)
+    end
+  end
+end
+
+unless Dir.exist?(mruby_libdir)
+  $stderr.puts "Warning: mruby is not built - building..."
+  if File.exist?("mruby-build.rb")
+    FileUtils.cp("mruby-build.rb", File.join(mruby_dir, "build_config.rb"))
+  end
+  Dir.chdir(mruby_dir) do
+    unless system('./minirake')
+      $stderr.puts "Error: failed to build mruby"
+      exit -2
+    end
+  end
+end
+
+output_directory = File.expand_path(options[:output_directory])
+unless File.exist?(output_directory)
+  $stderr.puts "Warning: output directory does not exist. Creating..."
+  FileUtils.mkdir_p(output_directory)
+end
+
+oparts = output_directory.split(File::SEPARATOR)
+lparts = mruby_libdir.split(File::SEPARATOR)
+
+i = 0
+while i < oparts.length
+  if oparts[i] == lparts.first
+    lparts.shift
+    i += 1
+  else
+    break
+  end
+end
+oparts.slice!(0, i)
+
+rpath = ((['..'] * oparts.length) + lparts).join(File::SEPARATOR)
+
+$opts = {
+  mruby_dir: mruby_dir,
+  mruby_libdir: rpath,
+  cflags: options.fetch(:cflags, []),
+  cpath: options[:cpath],
+  output_directory: options[:output_directory],
+  debug: options[:debug]
+}
+
+begin
+  require_relative '../lib/mruby-cr/crystal_generator'
+  require lib_spec
+rescue LoadError => e
+  $stderr.puts "Error: loading failure - ensure llvm with clang support is installed"
+  if options[:debug]
+    $stderr.puts "#{e.class} #{e}\n#{e.backtrace.join("\n")}"
+  end
+  exit -1
+rescue => e
+  $stderr.puts "Error: generation failed - #{e}"
+  if options[:debug]
+    $stderr.puts "#{e.class} #{e}\n#{e.backtrace.join("\n")}"
+  end
+  exit 1
+end
